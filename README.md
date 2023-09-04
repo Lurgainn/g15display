@@ -10,4 +10,5 @@ To achieve the full functionality of this program:
 * You must have installed "uinput-macropad.py" that uses the default path of config file (~/.config/uinput-macropad/config.json)
 ## Functionality
 The program read the uinput-macropad.py config file and configures the keyboard LCD to display the names of the actual existent macros  
-[!NOTE] uinput-macropad must manage the switch between the display screens
+> [!NOTE]  
+> uinput-macropad must manage the switch between the display screens
