@@ -29,6 +29,8 @@ import logging
 from logging.handlers import RotatingFileHandler
 import argparse
 import json
+import socket
+import time
 
 # Constants
 PROGNAME = 'g15display'
@@ -36,6 +38,8 @@ VERSION = '0.1'
 DEFAULT_CONFIG_FILE = '~/.config/uinput-macropad/config.json'
 LOG_FILE_PATH = '~/.local/state/'
 EMPTY_SCREEN_TITLE = '-----'
+HOST = '127.0.0.1'
+PORT_LCDd = 13666
 
 def parse_arguments(log_file):
 
@@ -77,28 +81,62 @@ def create_logger(args):
     return log
 
 class LCD:
-    # self.mkeys => titles
+    # self.mkeys => screen titles
     # self.m1 => G keys associated with M1
     # self.m2 => G keys associated with M2
     # self.m3 => G keys associated with M3
     # self.mr => G keys associated with MR
 
     def __init__(self, log, args):
+        # Initialize the class
+        # Get the parameters
         self.log = log
         self.args = args
+        # Set properties
+        self.conf_ok = True
+        self.connected = False
+        self.s = None
+        # Set default path to uinput-macropad config file
         self.config_file = os.path.expanduser(DEFAULT_CONFIG_FILE)
         # Set alternative path to config file
         if self.args.config_file is not None:
             self.config_file = self.args.config_file
             self.log.info(f"Loading config from: {self.config_file}")
-        self.ok = True
+        # Check if config file exists
         if os.path.isfile(self.config_file):
             self.load_json()
         else:
-            self.ok = False
+            self.conf_ok = False
+            self.log.error(f"Config file '{self.config_file}' not found")
         return None
     
+    def connect(self):
+        # Open the socket to communicate with LCDd daemon
+        try:
+            self.s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.log.info("Socket successfully created")
+            self.connected = True
+        except socket.error as err:
+            self.log.error("Socket creation failed with error %s" %(err))
+            self.connected = False
+        # Connect with LCDd daemon
+        self.s.connect((HOST, PORT_LCDd))
+        self.s.sendall("hello\n".encode())
+        hello_answer = self.s.recv(1024)
+
+        return None
+
+    def disconnect(self):
+        # Disconnect fro LCDd daemon and close the socket
+        self.connected = False
+        self.s.shutdown(socket.SHUT_RDWR)
+        self.s.close()
+
+        return None
+
     def load_json(self):
+        # Load relevant data from uinput-macropad config file
+        # Empty the variables
         self.mkeys = {'m1': EMPTY_SCREEN_TITLE, 'm2': EMPTY_SCREEN_TITLE, 'm3': EMPTY_SCREEN_TITLE, 'mr': EMPTY_SCREEN_TITLE}
         self.m1 = {'G1': "", 'G2': "", 'G3': "", 'G4': "", 'G5': "", 'G6': "", 'G7': "", 'G8': "", 'G9': "", \
             'G10': "", 'G11': "", 'G12': "", 'G13': "", 'G14': "", 'G15': "", 'G16': "", 'G17': "", 'G18': ""}
@@ -108,16 +146,19 @@ class LCD:
             'G10': "", 'G11': "", 'G12': "", 'G13': "", 'G14': "", 'G15': "", 'G16': "", 'G17': "", 'G18': ""}
         self.mr = {'G1': "", 'G2': "", 'G3': "", 'G4': "", 'G5': "", 'G6': "", 'G7': "", 'G8': "", 'G9': "", \
             'G10': "", 'G11': "", 'G12': "", 'G13': "", 'G14': "", 'G15': "", 'G16': "", 'G17': "", 'G18': ""}
+        # Try to load json data from config file
         try:
             f = open(self.config_file, 'r')
             self.json_data = json.loads(f.read())
             f.close()
         except:
-            self.ok = False
+            self.conf_ok = False
             self.log.error(f"Error loading config file '{self.config_file}'")
             return None
+        # First get layers names to check if some are related to M1...MR keys
         for layer in self.json_data['layers']:
             self.log.debug("Layer (names): " + str(layer))
+            # Get single layer data
             lay = {"name":None, "keys":None, "cmd": None}
             lay['name'] = layer[0]
             lay['keys'] = layer[1]
@@ -125,7 +166,9 @@ class LCD:
                 lay['cmd'] = layer[2]
             else:
                 lay['cmd'] = None
+            # For each hotkey check if there's a M1...MR key
             for key in lay['keys']:
+                # If match assign title to M1...MR key
                 match key:
                     case 691:
                         self.mkeys['m1'] = lay['name']
@@ -139,9 +182,12 @@ class LCD:
                     case 688:
                         self.mkeys['mr'] = lay['name']
                         self.log.debug("Found layer for MR key: " + lay['name'])
+        # Now load all macros
         macros = self.json_data['macros']
+        # Check name of group of macros
         for macro in macros:
             self.log.debug("Macros (names): " + str(macros))
+            # Uses macros group name to select the dictionary to load with single macro names
             if macro == self.mkeys.get('m1'):
                 m = self.m1
             elif macro == self.mkeys.get('m2'):
@@ -158,45 +204,64 @@ class LCD:
                 mac['keys'] = macr[1]
                 mac['type'] = macr[2]
                 mac['info'] = macr[3]
+                # Load macro name if the hotkey is associated with a G1...G18 key
                 for key in mac['keys']:
                     match key:
                         case 656:
                             m['G1'] = mac['name']
+                            self.log.debug("Found macro for G1 key: " + mac['name'])
                         case 657:
                             m['G2'] = mac['name']
+                            self.log.debug("Found macro for G2 key: " + mac['name'])
                         case 658:
                             m['G3'] = mac['name']
+                            self.log.debug("Found macro for G3 key: " + mac['name'])
                         case 659:
                             m['G4'] = mac['name']
+                            self.log.debug("Found macro for G4 key: " + mac['name'])
                         case 660:
                             m['G5'] = mac['name']
+                            self.log.debug("Found macro for G5 key: " + mac['name'])
                         case 661:
                             m['G6'] = mac['name']
+                            self.log.debug("Found macro for G6 key: " + mac['name'])
                         case 662:
                             m['G7'] = mac['name']
+                            self.log.debug("Found macro for G7 key: " + mac['name'])
                         case 663:
                             m['G8'] = mac['name']
+                            self.log.debug("Found macro for G8 key: " + mac['name'])
                         case 664:
                             m['G9'] = mac['name']
+                            self.log.debug("Found macro for G9 key: " + mac['name'])
                         case 665:
                             m['G10'] = mac['name']
+                            self.log.debug("Found macro for G10 key: " + mac['name'])
                         case 666:
                             m['G11'] = mac['name']
+                            self.log.debug("Found macro for G11 key: " + mac['name'])
                         case 667:
                             m['G12'] = mac['name']
+                            self.log.debug("Found macro for G12 key: " + mac['name'])
                         case 668:
                             m['G13'] = mac['name']
+                            self.log.debug("Found macro for G13 key: " + mac['name'])
                         case 669:
                             m['G14'] = mac['name']
+                            self.log.debug("Found macro for G14 key: " + mac['name'])
                         case 670:
                             m['G15'] = mac['name']
+                            self.log.debug("Found macro for G15 key: " + mac['name'])
                         case 677:
                             m['G16'] = mac['name']
+                            self.log.debug("Found macro for G16 key: " + mac['name'])
                         case 678:
                             m['G17'] = mac['name']
+                            self.log.debug("Found macro for G17 key: " + mac['name'])
                         case 679:
                             m['G18'] = mac['name']
-        print('a')
+                            self.log.debug("Found macro for G18 key: " + mac['name'])
+
         return None
 
 if __name__ == "__main__":
@@ -208,6 +273,17 @@ if __name__ == "__main__":
     # Create logger
     prg_log = create_logger(prg_args)
     prg_log.debug(f"Command line args: {prg_args}")
+    # Create and initialize the clasas
     lcd = LCD(prg_log, prg_args)
-    if lcd.ok == False:
+    # If errors with config file exits
+    if lcd.conf_ok == False:
         sys.exit(1)
+    
+    lcd.connect()
+    if lcd.connected:
+        prg_log.info('Connected to LCDd daemon')
+        time.sleep(5)
+        lcd.disconnect()
+    else:
+        prg_log,error('Error while connecting to LCDd daemon')
+    sys.exit(0)
